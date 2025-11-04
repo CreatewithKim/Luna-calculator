@@ -1,0 +1,187 @@
+## Hotel Automation ROI Calculator (index.html)
+
+This document describes the structure, behavior, and maintenance notes for `index.html` — the Hotel Automation ROI Calculator used by ServeIQ / IQ Africa.
+
+## Overview
+
+`index.html` is a single-file web app that lets hotels estimate the ROI from adopting automation (chatbots, communication hubs, dynamic pricing, etc.). It contains UI controls for hotel inputs, a currency selector (with live exchange rates), calculation logic in JavaScript, and a download-to-Excel feature via the `xlsx` library.
+
+Key behaviours:
+- Collects hotel operational inputs from the user.
+- Computes annual and monthly savings, ROI, and payback period.
+- Fetches live currency exchange rates (via ExchangeRate API) and updates display symbols.
+- Exports a summary report to an XLSX file.
+
+## File structure (high-level)
+
+- HTML + CSS UI (header, sections for inputs, results, recommendations)
+- Currency selector and labels
+- JavaScript functions that perform:
+	- Fetching exchange rates (`fetchExchangeRates`)
+	- Updating currency labels and defaults (`updateCurrencyLabels`)
+	- Performing ROI calculations (`calculateROI`)
+	- Formatting currency (`formatCurrency`)
+	- Downloading results to XLSX (`downloadResults`)
+	- Small utility `scheduleCall`
+
+## Important element IDs (inputs and outputs)
+
+- Inputs
+	- `hotelName` (text)
+	- `roomCount` (number)
+	- `propertyType` (select)
+	- `occupancyRate` (number, %)
+	- `avgRate` (number, currency — average daily room rate)
+	- `dailyInquiries` (number)
+	- `responseTime` (number, hours)
+	- `staffCount` (number)
+	- `avgSalary` (number, currency/month)
+	- `otaPercentage` (number, % via OTAs)
+	- `otaCommission` (number, % commission charged by OTAs)
+	- `conversionRate` (number, % inquiries→bookings)
+	- `currency` (select)
+
+- Outputs / UI placeholders
+	- `resultsSection` (container shown when results are ready)
+	- `annualSavings`, `monthlySavings`, `roiPercentage`, `paybackPeriod`, `paybackMonths`
+	- `currentResponseTime`, `currentStaffHours`, `currentStaffCost`, `currentCommissions`, `lostBookings`
+	- `automatedStaffHours`, `automatedStaffCost`, `automatedCommissions`
+	- `recHotelName`, `recommendationsList`, `ctaSavings`
+
+## Main JavaScript functions & behavior
+
+- fetchExchangeRates()
+	- Async function that calls ExchangeRate API: currently `https://v6.exchangerate-api.com/v6/YOUR_API_KEY/latest/USD`.
+	- On success it populates the `currencyRates` object (KES, TZS, UGX, RWF, ZAR, NGN, EUR, GBP, USD).
+	- On failure it falls back to a hard-coded (older) rate map and shows an alert: "Unable to fetch current exchange rates. Using fallback rates.".
+	- Note: Replace the API key in the URL before deploying.
+
+- updateCurrencyLabels()
+	- Reads selected `currency`, sets visual `.currency-label` texts to proper symbol (KSh, $, €, etc.).
+	- Also sets `avgRate` and `avgSalary` to 0 (this code was changed to ensure defaults are zeroed when changing currency).
+
+- formatCurrency(amount, currency)
+	- Returns symbol + rounded amount with thousands separators. Example: `KSh12,345`.
+
+- calculateROI()
+	- Gathers all inputs (parses numeric values with `parseFloat`).
+	- Computes:
+		- annualRevenue = roomCount * 365 * occupancyRate * avgRate
+		- currentStaffCost = staffCount * avgSalary
+		- staffSavings (assumes 60% staff time saved), annualized
+		- OTA commission savings (assumes 20% reduction)
+		- improved conversion rate (10% improvement over current conversion)
+		- additional revenue from improved conversions (uses multiplier 2.5 in calculation)
+		- totalAnnualSavings = staff + ota + additionalRevenue
+		- setupCost and monthlyFee scaled by `currencyRates[currency]` (3 tiers by room count)
+		- annualInvestment = setupCost + monthlyFee*12
+		- roiPercentage = (netAnnualBenefit / annualInvestment) * 100
+		- paybackMonths = setupCost / (monthlySavings - monthlyFee)
+	- Updates the result elements and recommendations.
+
+- downloadResults()
+	- Uses `xlsx.full.min.js` to create an Excel workbook (`aoa_to_sheet`) and downloads it.
+
+- scheduleCall()
+	- Opens a simple `alert()` with contact details (placeholder).
+
+## Exchange rate/API notes
+
+- Current URL (in file):
+	- `https://v6.exchangerate-api.com/v6/YOUR_API_KEY/latest/USD` (you must replace `YOUR_API_KEY` with a valid key).
+- The app expects the API response to contain `conversion_rates` and `result === 'success'`.
+- Failure path: the app falls back to hard-coded rates and alerts users.
+
+Security / privacy:
+- Do not commit secret or paid API keys to public repositories. Prefer server-side storage or environment variables.
+- For a public site, consider a server-side proxy that stores the API key, adds caching, and avoids exposing your API key in client JS.
+
+Caching recommendation:
+- To reduce requests and avoid hitting API limits, cache the rates for a period (e.g., 1 hour or 24 hours). Approaches:
+	1) Server-side: store rates in a small cache and expose them via your own endpoint.
+	2) Client-side: store `currencyRates` + `Date.now()` in `localStorage` and reuse if not older than X minutes/hours.
+
+Example client-side caching snippet (optional):
+
+```js
+// before calling fetchExchangeRates()
+const cached = localStorage.getItem('rates_cache');
+if (cached) {
+	const obj = JSON.parse(cached);
+	const ageMs = Date.now() - obj.t;
+	if (ageMs < 1000 * 60 * 60) { // 1 hour
+		currencyRates = obj.rates;
+	} else {
+		// fetch and update cache
+	}
+}
+```
+
+## Known issues & edge-cases
+
+- Zero / empty input values:
+	- The app default values were set to `0` for all inputs. If left at `0` this may produce zeros or NaN/Infinity in calculations (for example `paybackMonths` divides by `(monthlySavings - monthlyFee)`).
+	- Recommendation: add input validation to require positive numbers where needed and display inline validation messages.
+
+- Division by zero: `paybackMonths` calculation can result in Infinity or NaN. Guard that by checking denominator and showing a friendly message instead.
+
+- Local file / CORS: fetching exchange rates from `file://` may be blocked by some browsers. Run the app through a local web server for best results.
+
+## How to run locally (Windows PowerShell)
+
+1. Recommended: serve the folder with a simple static server (Python or Node). From `c:\Users\PC\Desktop\Luna calc` run:
+
+```powershell
+# If you have Python 3 installed
+python -m http.server 8000
+
+# or with Node (http-server)
+# npx http-server -p 8000
+```
+
+2. Open your browser at `http://localhost:8000/index.html`.
+
+3. Replace the API key in `fetchExchangeRates()` with a valid key (see next section) before going to production.
+
+## Replacing the API key
+
+Open `index.html` and find the fetch URL inside `fetchExchangeRates()`:
+
+```js
+const response = await fetch('https://v6.exchangerate-api.com/v6/YOUR_API_KEY/latest/USD');
+```
+
+Replace `YOUR_API_KEY` with your ExchangeRate API key. Prefer a non-public approach in production (see server-side proxy note above).
+
+If you prefer another provider, adapt the parsing code to match that provider's JSON structure (e.g., `rates` vs `conversion_rates`).
+
+## Suggested code improvements (next steps)
+
+1. Input validation (inline) — prevent empty or invalid inputs; show helpful messages.
+2. Guard payback calculation against zero or negative denominators.
+3. Implement client-side caching (localStorage) or server-side caching for exchange rates.
+4. Move the API key to server-side and create a tiny proxy endpoint that the client calls.
+5. Add unit tests for calculation logic (extract numeric logic into a testable JS module).
+
+## Troubleshooting
+
+- If exchange rates aren't updating:
+	- Check the browser console for network or CORS errors.
+	- Confirm the API key is valid and has remaining quota.
+	- Try the refresh button (top-right) to manually request rates.
+
+- If results show `NaN`/`Infinity`:
+	- Ensure numeric inputs are non-empty and greater than zero where required (e.g., `avgRate`, `roomCount`, `avgSalary` where relevant).
+	- Add guard clauses around divisions to show user-friendly errors.
+
+## Contact / Attribution
+
+- Built for ServeIQ Africa / IQ Africa — contact info is present in the UI (placeholders in `scheduleCall()`).
+
+---
+
+Documentation saved to this file. If you want, I can also:
+- Add input validation code to `index.html` now.
+- Implement client-side caching for exchange rates.
+- Replace the in-file API key with a secure pattern (or prompt for key at runtime).
+
